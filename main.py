@@ -1,103 +1,101 @@
+import os
 import discord
 from discord.ext import commands
-import asyncio
+from discord import app_commands
 import random
-import os
 
-# -------- BOT SETUP --------
-
+# ---- BOT SETUP ----
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ---- ON READY ----
 @bot.event
 async def on_ready():
+    await bot.tree.sync()
     print(f"Logged in as {bot.user}")
 
-# -------- GIVEAWAYS --------
+# =========================
+# 🎉 GIVEAWAY COMMAND
+# =========================
+@bot.tree.command(name="giveaway", description="Start a giveaway")
+@app_commands.describe(prize="What are you giving away?")
+async def giveaway(interaction: discord.Interaction, prize: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def gstart(ctx, minutes: int, *, prize: str):
     embed = discord.Embed(
         title="🎉 GIVEAWAY 🎉",
-        description=f"**Prize:** {prize}\n\nReact with 🎉 to enter!",
-        color=discord.Color.purple()
+        description=f"Prize: **{prize}**\nReact with 🎉 to enter!",
+        color=discord.Color.gold()
     )
-    embed.set_footer(text=f"Ends in {minutes} minutes")
+    embed.set_footer(text="Ends when admin uses /end_giveaway")
 
-    msg = await ctx.send(embed=embed)
+    msg = await interaction.channel.send(embed=embed)
     await msg.add_reaction("🎉")
 
-    await asyncio.sleep(minutes * 60)
+    await interaction.response.send_message("✅ Giveaway started!", ephemeral=True)
 
-    msg = await ctx.channel.fetch_message(msg.id)
-    reaction = discord.utils.get(msg.reactions, emoji="🎉")
-
-    if reaction is None:
-        await ctx.send("No one entered 😔")
+# =========================
+# 🎉 END GIVEAWAY
+# =========================
+@bot.tree.command(name="end_giveaway", description="End the giveaway and pick a winner")
+async def end_giveaway(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
 
-    users = [u async for u in reaction.users() if not u.bot]
+    async for message in interaction.channel.history(limit=50):
+        for reaction in message.reactions:
+            if str(reaction.emoji) == "🎉":
+                users = [u async for u in reaction.users() if not u.bot]
+                if not users:
+                    await interaction.response.send_message("❌ No participants.", ephemeral=True)
+                    return
 
-    if not users:
-        await ctx.send("No valid entries 😔")
-        return
+                winner = random.choice(users)
+                await interaction.channel.send(f"🎉 **Winner:** {winner.mention}!")
+                await interaction.response.send_message("✅ Giveaway ended.", ephemeral=True)
+                return
 
-    winner = random.choice(users)
-    await ctx.send(f"🎉 Congrats {winner.mention}! You won **{prize}**")
+    await interaction.response.send_message("❌ No giveaway found.", ephemeral=True)
 
-# -------- TICKETS --------
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def ticketpanel(ctx):
-    embed = discord.Embed(
-        title="🎫 Support Tickets",
-        description="React with 🎫 to open a ticket",
-        color=discord.Color.blue()
-    )
-    msg = await ctx.send(embed=embed)
-    await msg.add_reaction("🎫")
-
-@bot.event
-async def on_reaction_add(reaction, user):
-    if user.bot:
-        return
-
-    if reaction.emoji != "🎫":
-        return
-
-    guild = reaction.message.guild
+# =========================
+# 🎫 TICKET SYSTEM
+# =========================
+@bot.tree.command(name="ticket", description="Create a support ticket")
+async def ticket(interaction: discord.Interaction):
+    guild = interaction.guild
 
     category = discord.utils.get(guild.categories, name="Tickets")
     if category is None:
         category = await guild.create_category("Tickets")
 
-    # Prevent duplicate tickets
-    existing = discord.utils.get(
-        guild.text_channels,
-        name=f"ticket-{user.name.lower()}"
-    )
-    if existing:
-        return
-
     channel = await guild.create_text_channel(
-        name=f"ticket-{user.name}",
-        category=category
+        name=f"ticket-{interaction.user.name}",
+        category=category,
+        overwrites={
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True)
+        }
     )
 
-    await channel.set_permissions(guild.default_role, view_channel=False)
-    await channel.set_permissions(user, view_channel=True, send_messages=True)
-
-    await channel.send(
-        f"{user.mention} 🎫 Ticket created!\n"
-        "Please explain your issue. A staff member will help you soon."
+    await channel.send(f"🎫 Ticket created for {interaction.user.mention}")
+    await interaction.response.send_message(
+        f"✅ Your ticket has been created: {channel.mention}",
+        ephemeral=True
     )
 
-# -------- RUN BOT --------
+# =========================
+# ---- RUN BOT (IMPORTANT)
+# =========================
+TOKEN = os.getenv("TOKEN")
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+if TOKEN is None:
+    raise RuntimeError("TOKEN environment variable not set")
+
 bot.run(TOKEN)
